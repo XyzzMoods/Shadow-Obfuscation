@@ -1,0 +1,268 @@
+<!doctype html>
+
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>X-Vision (Thermal Recorder) — Demo</title>
+  <style>
+    :root{--bg:#07101a;--panel:#0f1720;--accent1:#ff6ea8;--accent2:#ffb86b}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Arial;background:linear-gradient(180deg,#03040a,#07101a);color:#e6eef8}
+    .app{display:grid;grid-template-columns:64px 1fr 320px;gap:12px;align-items:stretch;height:100vh;padding:16px}
+    .side{background:rgba(255,255,255,0.02);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:12px;align-items:center}
+    .side .btn{width:48px;height:48px;border-radius:10px;background:rgba(255,255,255,0.02);display:flex;align-items:center;justify-content:center;cursor:pointer}
+    .center{display:flex;flex-direction:column;gap:12px}
+    .viewer{background:linear-gradient(180deg,#071020,#0b1722);border-radius:12px;padding:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:70vh}
+    canvas{max-width:100%;border-radius:8px;box-shadow:0 6px 20px rgba(2,6,23,0.6);background:#000}
+    .controls{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:8px}
+    .left-controls{display:flex;gap:8px}
+    .primary{background:linear-gradient(90deg,var(--accent1),var(--accent2));border:none;padding:8px 12px;border-radius:8px;color:#081018;font-weight:700;cursor:pointer}
+    .danger{background:linear-gradient(90deg,#ff416c,#ff8f6b);border:none;padding:8px 12px;border-radius:8px;color:white;font-weight:700;cursor:pointer}
+    .secondary{background:transparent;border:1px solid rgba(255,255,255,0.06);padding:8px 10px;border-radius:8px;color:#cfe7ff;cursor:pointer}
+    select{background:transparent;border:1px solid rgba(255,255,255,0.06);padding:8px;border-radius:8px;color:#eaf6ff}
+    .status{font-size:13px;color:#9fb8d9}
+    .upload{display:inline-block}
+    .rec-indicator{display:inline-flex;align-items:center;gap:8px}
+    .dot{width:12px;height:12px;border-radius:50%;background:#ff3b30;box-shadow:0 0 8px rgba(255,59,48,0.9)}
+    .gallery{display:flex;flex-direction:column;gap:8px}
+    .thumb{background:rgba(255,255,255,0.02);padding:8px;border-radius:8px;display:flex;gap:8px;align-items:center}
+    .thumb video{width:100%;border-radius:6px}
+    .meta{font-size:13px;color:#9fb8d9}
+    .footer-hint{font-size:13px;color:#9fb8d9;opacity:0.9}
+    @media (max-width:980px){.app{grid-template-columns:48px 1fr;grid-template-rows:auto 320px}.side:last-child{display:none}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="side">
+      <div class="btn" id="btnGallery" title="Gallery">📁</div>
+      <div class="btn" id="btnCapture" title="Capture">📸</div>
+      <div class="btn" id="btnRecord" title="Record">⏺️</div>
+      <div class="btn" id="btnCalibrate" title="Calibrate">⚙️</div>
+    </div><div class="center">
+  <div class="viewer">
+    <canvas id="outCanvas" width="640" height="480"></canvas>
+  </div>
+
+  <div class="controls">
+    <div class="left-controls">
+      <label class="secondary upload">
+        Pilih gambar
+        <input id="fileInput" type="file" accept="image/*" style="display:none">
+      </label>
+      <button class="secondary" id="useWebcam">Gunakan Webcam</button>
+      <button class="primary" id="downloadBtn">Unduh Gambar</button>
+    </div>
+
+    <div style="display:flex;gap:12px;align-items:center">
+      <select id="paletteSelect" title="Palette">
+        <option value="hot">Hot (merah-magenta)</option>
+        <option value="iron">Iron</option>
+        <option value="ice">Ice (biru)</option>
+        <option value="green">Green</option>
+        <option value="gray">Grayscale</option>
+      </select>
+
+      <div class="rec-indicator" id="recIndicator" style="display:none">
+        <div class="dot"></div>
+        <div class="meta" id="recTimer">00:00</div>
+      </div>
+
+      <div class="status" id="status">Ready</div>
+    </div>
+  </div>
+
+  <div class="footer-hint">Tip: Tekan <strong>Gunakan Webcam</strong> lalu tekan tombol <strong>Rec</strong> di panel kanan untuk merekam video hasil simulasi.</div>
+</div>
+
+<div class="side">
+  <div style="display:flex;flex-direction:column;gap:8px;width:100%">
+    <button id="recordBtn" class="danger">Rec</button>
+    <button id="stopBtn" class="secondary">Stop</button>
+    <button id="saveLatest" class="primary">Simpan Terakhir</button>
+    <div style="height:8px"></div>
+    <div class="gallery" id="gallery"></div>
+  </div>
+</div>
+
+  </div><script>
+  // --- elements
+  const outCanvas = document.getElementById('outCanvas');
+  const ctx = outCanvas.getContext('2d');
+  const fileInput = document.getElementById('fileInput');
+  const useWebcam = document.getElementById('useWebcam');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const paletteSelect = document.getElementById('paletteSelect');
+  const status = document.getElementById('status');
+  const recordBtn = document.getElementById('recordBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  const recIndicator = document.getElementById('recIndicator');
+  const recTimer = document.getElementById('recTimer');
+  const gallery = document.getElementById('gallery');
+  const saveLatest = document.getElementById('saveLatest');
+
+  // --- hidden source canvas & contexts
+  let srcCanvas = document.createElement('canvas');
+  let sctx = srcCanvas.getContext('2d');
+
+  // video
+  let videoStream = null; let videoEl = null; let raf = null;
+
+  // recording
+  let mediaRecorder = null; let recordedBlobs = []; let isRecording = false; let recStart = 0; let recTimerInterval = null; let lastBlob = null;
+
+  // palettes
+  const palettes = {
+    hot: [[0,0,0],[80,0,120],[220,0,200],[255,80,0],[255,255,180]],
+    iron: [[0,0,0],[40,0,60],[180,0,100],[255,180,50],[255,255,255]],
+    ice: [[0,0,50],[0,50,150],[0,180,255],[180,255,255],[255,255,255]],
+    green: [[0,0,0],[0,80,10],[0,180,30],[160,255,80],[255,255,200]],
+    gray: [[0,0,0],[80,80,80],[160,160,160],[220,220,220],[255,255,255]]
+  };
+
+  function lerp(a,b,t){return a+(b-a)*t}
+  function samplePalette(palette, t){
+    const n = palette.length;
+    const f = t*(n-1);
+    const i = Math.floor(f);
+    const u = f - i;
+    const c1 = palette[Math.max(0,Math.min(n-1,i))];
+    const c2 = palette[Math.max(0,Math.min(n-1,i+1))];
+    return [Math.round(lerp(c1[0],c2[0],u)),Math.round(lerp(c1[1],c2[1],u)),Math.round(lerp(c1[2],c2[2],u))];
+  }
+
+  function applyThermalToImage() {
+    if(!srcCanvas.width || !srcCanvas.height) return;
+    const w = outCanvas.width = Math.min(1280, Math.max(320, srcCanvas.width));
+    const h = outCanvas.height = Math.round(w * srcCanvas.height / srcCanvas.width);
+    sctx.canvas.width = srcCanvas.width; sctx.canvas.height = srcCanvas.height;
+
+    sctx.drawImage(srcCanvas,0,0);
+    const src = sctx.getImageData(0,0,srcCanvas.width,srcCanvas.height);
+    const dst = ctx.createImageData(w,h);
+    const pal = palettes[paletteSelect.value] || palettes.hot;
+
+    for(let y=0;y<h;y++){
+      for(let x=0;x<w;x++){
+        const sx = Math.floor(x * srcCanvas.width / w);
+        const sy = Math.floor(y * srcCanvas.height / h);
+        const si = (sy*srcCanvas.width + sx)*4;
+        const r = src.data[si], g=src.data[si+1], b=src.data[si+2];
+        const lum = (0.299*r + 0.587*g + 0.114*b)/255;
+        const gamma = 0.9; const contrast = 1.2;
+        let t = Math.pow(lum, gamma);
+        t = Math.min(1, Math.max(0, (t-0.0) * contrast));
+        const col = samplePalette(pal, t);
+        const di = (y*w + x)*4;
+        dst.data[di] = col[0]; dst.data[di+1] = col[1]; dst.data[di+2] = col[2]; dst.data[di+3] = 255;
+      }
+    }
+    ctx.putImageData(dst,0,0);
+  }
+
+  function drawLoop() {
+    if(videoEl && videoEl.readyState >= 2){
+      srcCanvas.width = videoEl.videoWidth; srcCanvas.height = videoEl.videoHeight;
+      sctx.drawImage(videoEl,0,0);
+      applyThermalToImage();
+    }
+    raf = requestAnimationFrame(drawLoop);
+  }
+
+  // file input
+  fileInput.addEventListener('change', e=>{
+    stopVideo();
+    const file = e.target.files[0]; if(!file) return;
+    const img = new Image(); img.onload = ()=>{
+      srcCanvas.width = img.width; srcCanvas.height = img.height; sctx.drawImage(img,0,0); applyThermalToImage(); status.textContent = 'Image loaded — simulated thermal.';
+    }
+    img.src = URL.createObjectURL(file);
+  });
+
+  // webcam
+  useWebcam.addEventListener('click', async ()=>{
+    try{
+      if(videoStream) { stopVideo(); useWebcam.textContent='Gunakan Webcam'; return; }
+      videoStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+      videoEl = document.createElement('video'); videoEl.autoplay = true; videoEl.playsInline = true; videoEl.muted = true; videoEl.srcObject = videoStream;
+      useWebcam.textContent='Stop Webcam'; status.textContent = 'Webcam aktif — menyesuaikan...';
+      videoEl.onloadedmetadata = ()=>{ videoEl.play(); drawLoop(); status.textContent='Webcam running — simulated thermal.' }
+    }catch(err){console.error(err); status.textContent = 'Gagal akses webcam: '+err.message}
+  });
+
+  function stopVideo(){ if(raf) cancelAnimationFrame(raf); raf=null; if(videoStream){ videoStream.getTracks().forEach(t=>t.stop()); videoStream=null; } videoEl=null; status.textContent='Stopped'; useWebcam.textContent='Gunakan Webcam'; }
+
+  // recording controls
+  function startRecording(){
+    if(isRecording) return;
+    // capture processed canvas stream
+    const stream = outCanvas.captureStream(30); // 30fps
+    recordedBlobs = [];
+    try{
+      mediaRecorder = new MediaRecorder(stream, {mimeType:'video/webm;codecs=vp9'});
+    }catch(e){
+      try{ mediaRecorder = new MediaRecorder(stream, {mimeType:'video/webm;codecs=vp8'}); }catch(e2){ mediaRecorder = new MediaRecorder(stream); }
+    }
+
+    mediaRecorder.ondataavailable = e=>{ if(e.data && e.data.size>0) recordedBlobs.push(e.data); };
+    mediaRecorder.onstop = ()=>{
+      lastBlob = new Blob(recordedBlobs, {type:'video/webm'});
+      addToGallery(lastBlob);
+      status.textContent = 'Recording stopped. Video added to gallery.';
+    };
+
+    mediaRecorder.start(100); // collect in 100ms chunks
+    isRecording = true; recStart = Date.now(); recIndicator.style.display='inline-flex'; startTimer(); status.textContent='Recording...';
+  }
+
+  function stopRecording(){ if(!isRecording) return; mediaRecorder.stop(); isRecording=false; recIndicator.style.display='none'; stopTimer(); }
+
+  function startTimer(){ recTimer.textContent='00:00'; recTimerInterval = setInterval(()=>{
+    const s = Math.floor((Date.now()-recStart)/1000); const mm = String(Math.floor(s/60)).padStart(2,'0'); const ss = String(s%60).padStart(2,'0'); recTimer.textContent = mm+':'+ss;
+  },250); }
+  function stopTimer(){ clearInterval(recTimerInterval); recTimerInterval=null; }
+
+  recordBtn.addEventListener('click', ()=>{ if(!videoEl && !srcCanvas.width) { status.textContent='Aktifkan webcam atau pilih gambar dulu'; return; } startRecording(); });
+  stopBtn.addEventListener('click', ()=>{ stopRecording(); });
+
+  // download last image
+  downloadBtn.addEventListener('click', ()=>{
+    const a = document.createElement('a'); a.href = outCanvas.toDataURL('image/png'); a.download = 'x-vision-thermal.png'; a.click();
+  });
+
+  // save latest recorded video
+  saveLatest.addEventListener('click', ()=>{
+    if(!lastBlob){ status.textContent='Belum ada rekaman.'; return; }
+    const url = URL.createObjectURL(lastBlob); const a = document.createElement('a'); a.href = url; a.download = 'xvision-recording.webm'; a.click(); status.textContent='Menyimpan video...';
+  });
+
+  function addToGallery(blob){
+    const url = URL.createObjectURL(blob);
+    const item = document.createElement('div'); item.className='thumb';
+    const v = document.createElement('video'); v.src = url; v.controls = true; v.width = 280; v.preload='metadata';
+    const meta = document.createElement('div'); meta.className='meta';
+    const t = new Date(); meta.innerHTML = `<div>Rekaman — ${t.toLocaleString()}</div><div style="margin-top:6px"><button class='secondary' onclick="(function(u){const a=document.createElement('a');a.href=u;a.download='xvision-'+Date.now()+'.webm';a.click();})(\'${url}\')">Unduh</button></div>`;
+    item.appendChild(v); item.appendChild(meta);
+    gallery.prepend(item);
+  }
+
+  // palette change
+  paletteSelect.addEventListener('change', ()=>{ applyThermalToImage(); status.textContent='Palette: '+paletteSelect.value });
+
+  // placeholder starter
+  (function makePlaceholder(){
+    const img = new Image(); img.onload = ()=>{ srcCanvas.width=img.width; srcCanvas.height=img.height; sctx.drawImage(img,0,0); applyThermalToImage(); };
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='640' height='480'><rect width='100%' height='100%' fill='black'/><circle cx='320' cy='200' r='120' fill='white' opacity='0.9'/><rect x='50' y='300' width='540' height='40' fill='white' opacity='0.8'/></svg>`;
+    img.src = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+  })();
+
+  // keyboard shortcuts
+  window.addEventListener('keydown', e=>{
+    if(e.key==='c') { downloadBtn.click(); }
+    if(e.key==='w'){ useWebcam.click(); }
+    if(e.key==='r'){ recordBtn.click(); }
+    if(e.key==='s'){ stopBtn.click(); }
+  })
+
+</script></body>
+</html>
